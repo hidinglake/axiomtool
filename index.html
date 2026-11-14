@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Square Cropper</title>
+<style>
+  :root {
+    --bg: #111214; --panel: #1b1d21; --line: #2c2f35; --text: #e9eaec;
+    --muted: #8b9099; --accent: #4f9dff; --accent-2: #2f7de0; --ok: #3ccf8e;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  body { display: flex; flex-direction: column; min-height: 100dvh; }
+  header { display: flex; align-items: center; gap: 12px; padding: 12px 16px;
+    border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; letter-spacing: .2px; }
+  header .spacer { flex: 1; }
+  #counter { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .progress { height: 3px; background: var(--line); }
+  .progress > div { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+  main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  section[hidden] { display: none !important; }
+
+  button { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line);
+    padding: 9px 14px; border-radius: 8px; cursor: pointer; }
+  button:hover:not(:disabled) { border-color: #444a52; }
+  button:disabled { opacity: .4; cursor: default; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  button.primary:hover:not(:disabled) { background: var(--accent-2); }
+  button.link { background: none; border: none; color: var(--muted); text-decoration: underline; padding: 6px; }
+
+  /* Upload view */
+  #pick { flex: 1; display: flex; align-items: center; justify-content: center; padding: 24px; }
+  #dropzone { width: min(560px, 100%); border: 2px dashed var(--line); border-radius: 14px; padding: 40px 24px;
+    text-align: center; transition: border-color .15s, background .15s; }
+  #dropzone.over { border-color: var(--accent); background: rgba(79,157,255,.06); }
+  #dropzone p { margin: 6px 0; color: var(--muted); }
+  #dropzone .big { font-size: 18px; color: var(--text); font-weight: 600; }
+  #queueInfo { margin: 18px 0 14px; min-height: 1.4em; }
+  .row { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+
+  /* Crop view */
+  #crop { flex: 1; min-height: 0; }
+  #stage { flex: 1; display: flex; align-items: center; justify-content: center; padding: 12px; min-height: 0;
+    touch-action: none; user-select: none; -webkit-user-select: none; cursor: crosshair; }
+  #frame { position: relative; overflow: hidden; line-height: 0; }
+  #img { display: block; max-width: calc(100vw - 24px); max-height: calc(100dvh - 190px);
+    -webkit-user-drag: none; pointer-events: none; }
+  #sel { position: absolute; left: 0; top: 0; outline: 2px solid #fff;
+    box-shadow: 0 0 0 9999px rgba(0,0,0,.6); pointer-events: none;
+    background-image:
+      linear-gradient(to right, rgba(255,255,255,.35) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(255,255,255,.35) 1px, transparent 1px);
+    background-size: 33.333% 33.333%; background-position: -1px -1px; }
+  #crop .controls { display: flex; gap: 10px; justify-content: center; align-items: center; flex-wrap: wrap;
+    padding: 10px 16px 16px; }
+  #fname { color: var(--muted); font-size: 13px; text-align: center; padding: 0 16px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .hint { color: var(--muted); font-size: 13px; text-align: center; }
+
+  /* Done view */
+  #done { padding: 16px; gap: 14px; }
+  #done .bar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  #summary { color: var(--muted); }
+  #grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; }
+  .tile { position: relative; aspect-ratio: 1; border-radius: 8px; overflow: hidden; background: var(--panel);
+    border: 1px solid var(--line); cursor: pointer; padding: 0; }
+  .tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .tile.skipped img { opacity: .3; filter: grayscale(1); }
+  .tile .tag { position: absolute; left: 6px; bottom: 6px; font-size: 11px; padding: 2px 6px; border-radius: 4px;
+    background: rgba(0,0,0,.7); }
+  .tile:hover { border-color: var(--accent); }
+
+  #toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: #2a2d33;
+    border: 1px solid var(--line); padding: 10px 14px; border-radius: 8px; opacity: 0; transition: opacity .2s;
+    pointer-events: none; max-width: 90vw; }
+  #toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Square Cropper</h1>
+  <div class="spacer"></div>
+  <span id="counter"></span>
+</header>
+<div class="progress"><div id="progress"></div></div>
+
+<main>
+  <!-- 1. Pick images -->
+  <section id="pick">
+    <div id="dropzone">
+      <p class="big">Drop images here</p>
+      <p>or</p>
+      <div class="row">
+        <button id="chooseBtn">Choose images…</button>
+      </div>
+      <input id="fileInput" type="file" accept="image/*" multiple hidden>
+      <div id="queueInfo"></div>
+      <div class="row">
+        <button id="uploadBtn" class="primary" disabled>Upload</button>
+        <button id="clearBtn" class="link" hidden>Clear</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 2. Crop one by one -->
+  <section id="crop" hidden style="display:flex;flex-direction:column">
+    <div id="stage">
+      <div id="frame">
+        <img id="img" alt="">
+        <div id="sel"></div>
+      </div>
+    </div>
+    <div id="fname"></div>
+    <div class="controls">
+      <button id="backBtn">← Back</button>
+      <button id="centerBtn">Crop center</button>
+      <button id="skipBtn">Skip →</button>
+      <button id="finishBtn" class="link">Finish now</button>
+    </div>
+    <div class="hint" style="padding-bottom:12px">Move the square, then click (or tap) to crop · Enter = crop · ← back · → skip</div>
+  </section>
+
+  <!-- 3. Review & save -->
+  <section id="done" hidden style="display:flex;flex-direction:column">
+    <div class="bar">
+      <button id="saveZipBtn" class="primary">Save all (.zip)</button>
+      <button id="saveEachBtn">Download individually</button>
+      <button id="shareBtn" hidden>Share / Save to Photos</button>
+      <span class="spacer" style="flex:1"></span>
+      <button id="restartBtn" class="link">Start over</button>
+    </div>
+    <div id="summary"></div>
+    <div id="grid"></div>
+    <div class="hint">Tap any image to redo its crop.</div>
+  </section>
+</main>
+
+<div id="toast"></div>
+
+<script>
+(() => {
+  const $ = s => document.querySelector(s);
+  const views = { pick: $('#pick'), crop: $('#crop'), done: $('#done') };
+  const img = $('#img'), sel = $('#sel'), stage = $('#stage');
+
+  /** @type {{file: File, url?: string, crop?: {blob: Blob, url: string, type: string}, skipped?: boolean, error?: boolean}[]} */
+  let items = [];
+  let idx = 0;
+  let editingOne = false;            // true when redoing a single crop from the review grid
+  const cur = { w: 0, h: 0, side: 0, x: 0, y: 0, scale: 1, ready: false };
+
+  // ---------- helpers ----------
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  function show(name) {
+    for (const k in views) views[k].hidden = k !== name;
+    updateCounter();
+  }
+  let toastTimer;
+  function toast(msg) {
+    const t = $('#toast'); t.textContent = msg; t.classList.add('show');
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 2600);
+  }
+  function updateCounter() {
+    const n = items.length;
+    const doneCount = items.filter(i => i.crop).length;
+    $('#counter').textContent = n ? (views.crop.hidden ? `${doneCount}/${n} cropped` : `${idx + 1} / ${n}`) : '';
+    $('#progress').style.width = n ? (doneCount / n * 100) + '%' : '0';
+  }
+  const isImage = f => f.type.startsWith('image/') || /\.(jpe?g|png|webp|gif|bmp|avif|heic|heif|tiff?)$/i.test(f.name);
+
+  // ---------- 1. picking ----------
+  function addFiles(list) {
+    const added = [...list].filter(isImage);
+    added.forEach(file => items.push({ file }));
+    if (list.length && !added.length) toast('No image files found in that selection.');
+    $('#queueInfo').textContent = items.length ? `${items.length} image${items.length > 1 ? 's' : ''} ready` : '';
+    $('#uploadBtn').disabled = !items.length;
+    $('#clearBtn').hidden = !items.length;
+  }
+  $('#chooseBtn').onclick = () => $('#fileInput').click();
+  $('#fileInput').onchange = e => { addFiles(e.target.files); e.target.value = ''; };
+  $('#clearBtn').onclick = reset;
+  const dz = $('#dropzone');
+  ['dragenter', 'dragover'].forEach(ev => document.addEventListener(ev, e => { e.preventDefault(); dz.classList.add('over'); }));
+  ['dragleave', 'drop'].forEach(ev => document.addEventListener(ev, e => { e.preventDefault(); if (ev === 'drop' || e.target === document.documentElement) dz.classList.remove('over'); }));
+  document.addEventListener('drop', e => { if (!views.pick.hidden) addFiles(e.dataTransfer.files); });
+  $('#uploadBtn').onclick = () => { if (items.length) { show('crop'); load(0); } };
+
+  // ---------- 2. cropping ----------
+  function load(i) {
+    idx = i;
+    cur.ready = false;
+    const it = items[i];
+    if (!it.url) it.url = URL.createObjectURL(it.file);
+    $('#fname').textContent = it.file.name + (it.crop ? '  (already cropped – click to redo)' : '');
+    sel.style.display = 'none';
+    img.onload = () => {
+      cur.w = img.naturalWidth; cur.h = img.naturalHeight;
+      cur.side = Math.min(cur.w, cur.h);              // largest square that fits
+      cur.x = (cur.w - cur.side) / 2; cur.y = (cur.h - cur.side) / 2;
+      cur.ready = true; sel.style.display = '';
+      layout();
+    };
+    img.onerror = () => {
+      it.error = true;
+      toast(`Couldn't open ${it.file.name} in this browser – skipped.`);
+      it.skipped = true; next();
+    };
+    img.src = it.url;
+    updateCounter();
+  }
+  function layout() {
+    if (!cur.ready) return;
+    cur.scale = img.clientWidth / cur.w;
+    const s = cur.scale;
+    sel.style.width = sel.style.height = (cur.side * s) + 'px';
+    sel.style.transform = `translate(${cur.x * s}px, ${cur.y * s}px)`;
+  }
+  function moveTo(clientX, clientY) {
+    if (!cur.ready) return;
+    const r = img.getBoundingClientRect();
+    const px = (clientX - r.left) / cur.scale, py = (clientY - r.top) / cur.scale;
+    cur.x = clamp(px - cur.side / 2, 0, cur.w - cur.side);
+    cur.y = clamp(py - cur.side / 2, 0, cur.h - cur.side);
+    layout();
+  }
+  function outType(file) {
+    return ['image/png', 'image/webp', 'image/jpeg'].includes(file.type) ? file.type : 'image/jpeg';
+  }
+  function doCrop() {
+    if (!cur.ready) return;
+    cur.ready = false;                                  // prevent double clicks
+    const it = items[idx];
+    const side = Math.round(cur.side);
+    const sx = Math.round(clamp(cur.x, 0, cur.w - side)), sy = Math.round(clamp(cur.y, 0, cur.h - side));
+    const c = document.createElement('canvas');
+    c.width = c.height = side;
+    const ctx = c.getContext('2d');
+    const type = outType(it.file);
+    if (type === 'image/jpeg') { ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, side, side); }
+    ctx.drawImage(img, sx, sy, side, side, 0, 0, side, side);
+    c.toBlob(blob => {
+      if (!blob) { toast('Crop failed (image may be too large for this browser).'); cur.ready = true; return; }
+      if (it.crop) URL.revokeObjectURL(it.crop.url);
+      it.crop = { blob, url: URL.createObjectURL(blob), type };
+      it.skipped = false;
+      next();
+    }, type, 0.95);
+  }
+  function next() {
+    if (editingOne) { editingOne = false; return finish(); }
+    if (idx < items.length - 1) load(idx + 1); else finish();
+  }
+
+  // pointer: mouse hovers to move + click to crop; touch drags to move + release to crop
+  let pressed = false;
+  stage.addEventListener('pointerdown', e => { pressed = true; stage.setPointerCapture(e.pointerId); moveTo(e.clientX, e.clientY); });
+  stage.addEventListener('pointermove', e => { if (pressed || e.pointerType === 'mouse') moveTo(e.clientX, e.clientY); });
+  stage.addEventListener('pointerup', e => { if (!pressed) return; pressed = false; moveTo(e.clientX, e.clientY); doCrop(); });
+  stage.addEventListener('pointercancel', () => { pressed = false; });
+  window.addEventListener('resize', layout);
+
+  $('#backBtn').onclick = () => { if (idx > 0) { editingOne = false; load(idx - 1); } };
+  $('#skipBtn').onclick = () => { items[idx].skipped = !items[idx].crop; next(); };
+  $('#centerBtn').onclick = () => { if (!cur.ready) return; cur.x = (cur.w - cur.side) / 2; cur.y = (cur.h - cur.side) / 2; layout(); doCrop(); };
+  $('#finishBtn').onclick = finish;
+  document.addEventListener('keydown', e => {
+    if (views.crop.hidden) return;
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); doCrop(); }
+    else if (e.key === 'ArrowLeft') $('#backBtn').click();
+    else if (e.key === 'ArrowRight' || e.key.toLowerCase() === 's') $('#skipBtn').click();
+  });
+
+  // ---------- 3. review & save ----------
+  function finish() {
+    show('done');
+    const grid = $('#grid'); grid.innerHTML = '';
+    items.forEach((it, i) => {
+      const b = document.createElement('button');
+      b.className = 'tile' + (it.crop ? '' : ' skipped');
+      const t = document.createElement('img');
+      t.src = it.crop ? it.crop.url : (it.url || (it.url = URL.createObjectURL(it.file)));
+      t.alt = it.file.name; t.loading = 'lazy';
+      b.appendChild(t);
+      if (!it.crop) { const tag = document.createElement('span'); tag.className = 'tag'; tag.textContent = it.error ? 'unreadable' : 'not cropped'; b.appendChild(tag); }
+      b.onclick = () => { if (it.error) return; editingOne = true; show('crop'); load(i); };
+      grid.appendChild(b);
+    });
+    const n = items.filter(i => i.crop).length;
+    $('#summary').textContent = `${n} of ${items.length} images cropped.`;
+    ['#saveZipBtn', '#saveEachBtn', '#shareBtn'].forEach(s => $(s).disabled = !n);
+    $('#shareBtn').hidden = !canShareFiles();
+    updateCounter();
+  }
+
+  function outputFiles() {
+    const used = new Set();
+    return items.filter(i => i.crop).map(it => {
+      const ext = { 'image/png': 'png', 'image/webp': 'webp', 'image/jpeg': 'jpg' }[it.crop.type];
+      const base = it.file.name.replace(/\.[^.]+$/, '') || 'image';
+      let name = `${base}_square.${ext}`, k = 2;
+      while (used.has(name.toLowerCase())) name = `${base}_square_${k++}.${ext}`;
+      used.add(name.toLowerCase());
+      return { name, blob: it.crop.blob, type: it.crop.type };
+    });
+  }
+  function download(blob, name) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+  }
+
+  $('#saveZipBtn').onclick = async () => {
+    const btn = $('#saveZipBtn'); btn.disabled = true; btn.textContent = 'Zipping…';
+    try { download(await makeZip(outputFiles()), 'cropped-images.zip'); }
+    catch (err) { toast('Could not build zip: ' + err.message); }
+    btn.disabled = false; btn.textContent = 'Save all (.zip)';
+  };
+  $('#saveEachBtn').onclick = async () => {
+    const files = outputFiles();
+    toast(`Downloading ${files.length} files – allow multiple downloads if your browser asks.`);
+    for (const f of files) { download(f.blob, f.name); await new Promise(r => setTimeout(r, 300)); }
+  };
+  function canShareFiles() {
+    try { return !!(navigator.canShare && navigator.canShare({ files: [new File([new Blob()], 'x.png', { type: 'image/png' })] })); }
+    catch { return false; }
+  }
+  $('#shareBtn').onclick = async () => {
+    const files = outputFiles().map(f => new File([f.blob], f.name, { type: f.type }));
+    try { await navigator.share({ files }); }
+    catch (err) { if (err.name !== 'AbortError') toast('Sharing failed: ' + err.message); }
+  };
+
+  function reset() {
+    items.forEach(it => { if (it.url) URL.revokeObjectURL(it.url); if (it.crop) URL.revokeObjectURL(it.crop.url); });
+    items = []; idx = 0; editingOne = false;
+    $('#queueInfo').textContent = ''; $('#uploadBtn').disabled = true; $('#clearBtn').hidden = true;
+    show('pick');
+  }
+  $('#restartBtn').onclick = () => { if (confirm('Discard all images and crops?')) reset(); };
+  window.addEventListener('beforeunload', e => { if (items.some(i => i.crop)) { e.preventDefault(); e.returnValue = ''; } });
+
+  // ---------- tiny zip writer (store, no compression – images are already compressed) ----------
+  const CRC = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+  function crc32(u8) { let c = 0xFFFFFFFF; for (let i = 0; i < u8.length; i++) c = CRC[(c ^ u8[i]) & 255] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+  async function makeZip(files) {
+    const enc = new TextEncoder(), parts = [], central = [];
+    const d = new Date();
+    const time = (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1);
+    const date = ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate();
+    let offset = 0;
+    for (const f of files) {
+      const data = new Uint8Array(await f.blob.arrayBuffer());
+      const name = enc.encode(f.name), crc = crc32(data);
+      const h = new DataView(new ArrayBuffer(30));
+      h.setUint32(0, 0x04034b50, true); h.setUint16(4, 20, true); h.setUint16(6, 0x0800, true);
+      h.setUint16(8, 0, true); h.setUint16(10, time, true); h.setUint16(12, date, true);
+      h.setUint32(14, crc, true); h.setUint32(18, data.length, true); h.setUint32(22, data.length, true);
+      h.setUint16(26, name.length, true); h.setUint16(28, 0, true);
+      parts.push(h, name, data);
+      const c = new DataView(new ArrayBuffer(46));
+      c.setUint32(0, 0x02014b50, true); c.setUint16(4, 20, true); c.setUint16(6, 20, true);
+      c.setUint16(8, 0x0800, true); c.setUint16(10, 0, true); c.setUint16(12, time, true); c.setUint16(14, date, true);
+      c.setUint32(16, crc, true); c.setUint32(20, data.length, true); c.setUint32(24, data.length, true);
+      c.setUint16(28, name.length, true); c.setUint32(42, offset, true);
+      central.push(c, name);
+      offset += 30 + name.length + data.length;
+    }
+    const cdSize = central.reduce((s, p) => s + p.byteLength, 0);
+    const e = new DataView(new ArrayBuffer(22));
+    e.setUint32(0, 0x06054b50, true); e.setUint16(8, files.length, true); e.setUint16(10, files.length, true);
+    e.setUint32(12, cdSize, true); e.setUint32(16, offset, true);
+    return new Blob([...parts, ...central, e], { type: 'application/zip' });
+  }
+})();
+</script>
+</body>
+</html>
